@@ -23,13 +23,15 @@ SYSCTL
 sysctl -p /etc/sysctl.d/99-disable-ipv6.conf
 systemctl restart systemd-resolved 2>/dev/null || true
 
-echo "=== 2. Установка и запуск Cloudflare WARP ==="
+echo "=== 2. Установка и перерегистрация чистого Cloudflare WARP ==="
 mkdir -p --mode=0755 /usr/share/keyrings
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null || true
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/cloudflare-client.list
 apt-get update -y && apt-get install -y cloudflare-warp
 
-# Регистрация WARP (с обработкой существующей регистрации)
+# Сброс старой регистрации для получения чистого европейского IP-пула
+warp-cli --accept-tos disconnect 2>/dev/null || true
+warp-cli --accept-tos registration delete 2>/dev/null || true
 warp-cli --accept-tos registration new 2>/dev/null || true
 warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli --accept-tos set-mode proxy 2>/dev/null || true
 warp-cli --accept-tos proxy port 40000 2>/dev/null || warp-cli --accept-tos set-proxy-port 40000 2>/dev/null || true
@@ -107,7 +109,7 @@ for ob in outbounds:
 outbounds.append(warp_outbound)
 template['outbounds'] = outbounds
 
-# Routing
+# Routing: Полный список доменов Google, Gemini, AI, Antigravity
 domains = [
     "geosite:google", "geosite:openai", "geosite:anthropic",
     "domain:google.com", "domain:youtube.com", "domain:googlevideo.com",
@@ -137,7 +139,7 @@ other_rules = [r for r in rules if r not in api_rules]
 new_rules = list(api_rules) + [google_rule, dns_port_rule, dns_proto_rule] + list(other_rules) + [quic_rule]
 template['routing'] = {'domainStrategy': 'IPIfNonMatch', 'rules': new_rules}
 
-# Запись в базу данных (insert or replace)
+# Запись в базу данных
 val_str = json.dumps(template)
 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', ?)", (val_str,))
 conn.commit()
@@ -149,6 +151,7 @@ echo "=== 4. Перезапуск 3X-UI ==="
 systemctl restart x-ui 2>/dev/null || true
 
 echo "=== 5. Проверка статуса ==="
-sleep 2
+sleep 3
 systemctl is-active --quiet x-ui && echo "✅ 3X-UI / Xray успешно запущен и настроен!" || echo "❌ Ошибка запуска x-ui"
 systemctl is-active --quiet warp-svc && echo "✅ Cloudflare WARP активен!" || echo "❌ Ошибка warp-svc"
+EOF
