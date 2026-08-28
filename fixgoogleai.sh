@@ -23,19 +23,33 @@ SYSCTL
 sysctl -p /etc/sysctl.d/99-disable-ipv6.conf
 systemctl restart systemd-resolved 2>/dev/null || true
 
-echo "=== 2. Установка и перерегистрация чистого Cloudflare WARP ==="
+echo "=== 2. Установка и подбор чистого пула Cloudflare WARP ==="
 mkdir -p --mode=0755 /usr/share/keyrings
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null || true
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/cloudflare-client.list
 apt-get update -y && apt-get install -y cloudflare-warp
 
-# Сброс старой регистрации для получения чистого европейского IP-пула
-warp-cli --accept-tos disconnect 2>/dev/null || true
-warp-cli --accept-tos registration delete 2>/dev/null || true
-warp-cli --accept-tos registration new 2>/dev/null || true
-warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli --accept-tos set-mode proxy 2>/dev/null || true
-warp-cli --accept-tos proxy port 40000 2>/dev/null || warp-cli --accept-tos set-proxy-port 40000 2>/dev/null || true
-warp-cli --accept-tos connect 2>/dev/null || true
+# Цикл поиска чистого европейского IP (до 6 попыток)
+for i in {1..6}; do
+    echo "Попытка $i получения чистого IP-пула Cloudflare..."
+    warp-cli --accept-tos disconnect 2>/dev/null || true
+    warp-cli --accept-tos registration delete 2>/dev/null || true
+    warp-cli --accept-tos registration new 2>/dev/null || true
+    warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli --accept-tos set-mode proxy 2>/dev/null || true
+    warp-cli --accept-tos proxy port 40000 2>/dev/null || warp-cli --accept-tos set-proxy-port 40000 2>/dev/null || true
+    warp-cli --accept-tos connect 2>/dev/null || true
+    sleep 3
+
+    # Проверка ответа Google
+    google_check=$(curl -x socks5h://127.0.0.1:40000 -sL https://www.google.com | head -c 250 || true)
+    if [[ "$google_check" == *"lang=\"ru\""* ]]; then
+        echo "⚠️ Попался IP с привязкой к RU, ротируем..."
+    else
+        echo "✅ Получен чистый европейский IP!"
+        break
+    fi
+done
+
 systemctl enable --now warp-svc 2>/dev/null || true
 
 echo "=== 3. Обновление базы данных 3X-UI ==="
@@ -154,4 +168,3 @@ echo "=== 5. Проверка статуса ==="
 sleep 3
 systemctl is-active --quiet x-ui && echo "✅ 3X-UI / Xray успешно запущен и настроен!" || echo "❌ Ошибка запуска x-ui"
 systemctl is-active --quiet warp-svc && echo "✅ Cloudflare WARP активен!" || echo "❌ Ошибка warp-svc"
-EOF
